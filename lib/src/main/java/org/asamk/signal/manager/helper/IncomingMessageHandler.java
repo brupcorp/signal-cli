@@ -15,6 +15,7 @@ import org.asamk.signal.manager.actions.SendGroupInfoRequestAction;
 import org.asamk.signal.manager.actions.SendReceiptAction;
 import org.asamk.signal.manager.actions.SendRetryMessageRequestAction;
 import org.asamk.signal.manager.actions.SendSyncBlockedListAction;
+import org.asamk.signal.manager.actions.SendSyncConfigurationAction;
 import org.asamk.signal.manager.actions.SendSyncContactsAction;
 import org.asamk.signal.manager.actions.SendSyncGroupsAction;
 import org.asamk.signal.manager.actions.SendSyncKeysAction;
@@ -144,7 +145,8 @@ public final class IncomingMessageHandler {
                 final var sender = account.getRecipientStore().resolveRecipient(e.getSender());
                 final var senderProfile = profileProvider.getProfile(sender);
                 final var selfProfile = profileProvider.getProfile(account.getSelfRecipientId());
-                if (senderProfile != null
+                if (e.getSenderDevice() != account.getDeviceId()
+                        && senderProfile != null
                         && senderProfile.getCapabilities().contains(Profile.Capability.senderKey)
                         && selfProfile != null
                         && selfProfile.getCapabilities().contains(Profile.Capability.senderKey)) {
@@ -270,7 +272,9 @@ public final class IncomingMessageHandler {
             if (rm.isKeysRequest()) {
                 actions.add(SendSyncKeysAction.create());
             }
-            // TODO Handle rm.isConfigurationRequest();
+            if (rm.isConfigurationRequest()) {
+                actions.add(SendSyncConfigurationAction.create());
+            }
         }
         if (syncMessage.getGroups().isPresent()) {
             logger.warn("Received a group v1 sync message, that can't be handled anymore, ignoring.");
@@ -352,7 +356,21 @@ public final class IncomingMessageHandler {
             }
         }
         if (syncMessage.getConfiguration().isPresent()) {
-            // TODO
+            final var configurationMessage = syncMessage.getConfiguration().get();
+            final var configurationStore = account.getConfigurationStore();
+            if (configurationMessage.getReadReceipts().isPresent()) {
+                configurationStore.setReadReceipts(configurationMessage.getReadReceipts().get());
+            }
+            if (configurationMessage.getLinkPreviews().isPresent()) {
+                configurationStore.setLinkPreviews(configurationMessage.getLinkPreviews().get());
+            }
+            if (configurationMessage.getTypingIndicators().isPresent()) {
+                configurationStore.setTypingIndicators(configurationMessage.getTypingIndicators().get());
+            }
+            if (configurationMessage.getUnidentifiedDeliveryIndicators().isPresent()) {
+                configurationStore.setUnidentifiedDeliveryIndicators(configurationMessage.getUnidentifiedDeliveryIndicators()
+                        .get());
+            }
         }
         return actions;
     }
@@ -415,7 +433,7 @@ public final class IncomingMessageHandler {
         }
 
         final var recipientId = recipientResolver.resolveRecipient(source);
-        if (!group.isMember(recipientId)) {
+        if (!group.isMember(recipientId) && !(group.isPendingMember(recipientId) && message.isGroupV2Update())) {
             return true;
         }
 

@@ -7,6 +7,7 @@ import org.whispersystems.libsignal.ecc.ECPublicKey;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.push.TrustStore;
 import org.whispersystems.signalservice.internal.configuration.SignalCdnUrl;
+import org.whispersystems.signalservice.internal.configuration.SignalCdshUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalContactDiscoveryUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalKeyBackupServiceUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalProxy;
@@ -38,13 +39,14 @@ class SandboxConfig {
     private final static String SIGNAL_CONTACT_DISCOVERY_URL = "https://api-staging.directory.signal.org";
     private final static String SIGNAL_KEY_BACKUP_URL = "https://api-staging.backup.signal.org";
     private final static String STORAGE_URL = "https://storage-staging.signal.org";
+    private final static String SIGNAL_CDSH_URL = "https://cdsh.staging.signal.org";
     private final static TrustStore TRUST_STORE = new WhisperTrustStore();
 
     private final static Optional<Dns> dns = Optional.absent();
     private final static Optional<SignalProxy> proxy = Optional.absent();
 
     private final static byte[] zkGroupServerPublicParams = Base64.getDecoder()
-            .decode("ABSY21VckQcbSXVNCGRYJcfWHiAMZmpTtTELcDmxgdFbtp/bWsSxZdMKzfCp8rvIs8ocCU3B37fT3r4Mi5qAemeGeR2X+/YmOGR5ofui7tD5mDQfstAI9i+4WpMtIe8KC3wU5w3Inq3uNWVmoGtpKndsNfwJrCg0Hd9zmObhypUnSkfYn2ooMOOnBpfdanRtrvetZUayDMSC5iSRcXKpdls=");
+            .decode("ABSY21VckQcbSXVNCGRYJcfWHiAMZmpTtTELcDmxgdFbtp/bWsSxZdMKzfCp8rvIs8ocCU3B37fT3r4Mi5qAemeGeR2X+/YmOGR5ofui7tD5mDQfstAI9i+4WpMtIe8KC3wU5w3Inq3uNWVmoGtpKndsNfwJrCg0Hd9zmObhypUnSkfYn2ooMOOnBpfdanRtrvetZUayDMSC5iSRcXKpdlukrpzzsCIvEwjwQlJYVPOQPj4V0F4UXXBdHSLK05uoPBCQG8G9rYIGedYsClJXnbrgGYG3eMTG5hnx4X4ntARB");
 
     static SignalServiceConfiguration createDefaultServiceConfiguration(
             final List<Interceptor> interceptors
@@ -58,6 +60,7 @@ class SandboxConfig {
                         TRUST_STORE)},
                 new SignalKeyBackupServiceUrl[]{new SignalKeyBackupServiceUrl(SIGNAL_KEY_BACKUP_URL, TRUST_STORE)},
                 new SignalStorageUrl[]{new SignalStorageUrl(STORAGE_URL, TRUST_STORE)},
+                new SignalCdshUrl[]{new SignalCdshUrl(SIGNAL_CDSH_URL, TRUST_STORE)},
                 interceptors,
                 dns,
                 proxy,

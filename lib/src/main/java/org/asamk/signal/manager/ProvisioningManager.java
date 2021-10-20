@@ -126,24 +126,23 @@ public class ProvisioningManager {
                     profileKey,
                     TrustNewIdentity.ON_FIRST_USE);
 
-            Manager m = null;
+            ManagerImpl m = null;
             try {
-                m = new Manager(account, pathConfig, serviceEnvironmentConfig, userAgent);
+                m = new ManagerImpl(account, pathConfig, serviceEnvironmentConfig, userAgent);
 
                 logger.debug("Refreshing pre keys");
                 try {
                     m.refreshPreKeys();
                 } catch (Exception e) {
-                    logger.error("Failed to check new account state.");
-                    throw e;
+                    logger.error("Failed to refresh pre keys.");
                 }
 
                 logger.debug("Requesting sync data");
                 try {
                     m.requestAllSyncData();
                 } catch (Exception e) {
-                    logger.error("Failed to request sync messages from linked device.");
-                    throw e;
+                    logger.error(
+                            "Failed to request sync messages from linked device, data can be requested again with `sendSyncRequest`.");
                 }
 
                 final var result = m;
@@ -178,7 +177,7 @@ public class ProvisioningManager {
                 return false;
             }
 
-            final var m = new Manager(signalAccount, pathConfig, serviceEnvironmentConfig, userAgent);
+            final var m = new ManagerImpl(signalAccount, pathConfig, serviceEnvironmentConfig, userAgent);
             try (m) {
                 m.checkAccountState();
             } catch (AuthorizationFailedException ignored) {

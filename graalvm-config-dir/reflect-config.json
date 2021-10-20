@@ -317,6 +317,16 @@
   "allDeclaredClasses":true
 },
 {
+  "name":"org.asamk.Signal$Device",
+  "allDeclaredMethods":true,
+  "allDeclaredClasses":true
+},
+{
+  "name":"org.asamk.Signal$Group",
+  "allDeclaredMethods":true,
+  "allDeclaredClasses":true
+},
+{
   "name":"org.asamk.Signal$MessageReceived",
   "allDeclaredConstructors":true,
   "allPublicConstructors":true
@@ -327,9 +337,22 @@
   "allPublicConstructors":true
 },
 {
+  "name":"org.asamk.Signal$StructDevice",
+  "allDeclaredFields":true
+},
+{
+  "name":"org.asamk.Signal$StructGroup",
+  "allDeclaredFields":true
+},
+{
   "name":"org.asamk.Signal$SyncMessageReceived",
   "allDeclaredConstructors":true,
   "allPublicConstructors":true
+},
+{
+  "name":"org.asamk.SignalControl",
+  "allDeclaredMethods":true,
+  "allDeclaredClasses":true
 },
 {
   "name":"org.asamk.signal.commands.GetUserStatusCommand$JsonUserStatus",
@@ -1115,6 +1138,15 @@
   "allDeclaredClasses":true
 },
 {
+  "name":"org.freedesktop.dbus.interfaces.Properties",
+  "allDeclaredMethods":true,
+  "allDeclaredClasses":true
+},
+{
+  "name":"org.freedesktop.dbus.interfaces.Properties$PropertiesChanged",
+  "allPublicConstructors":true
+},
+{
   "name":"org.objectweb.asm.util.TraceMethodVisitor"
 },
 {
@@ -1487,6 +1519,12 @@
 },
 {
   "name":"org.whispersystems.signalservice.api.profiles.SignalServiceProfile",
+  "allDeclaredFields":true,
+  "allDeclaredMethods":true,
+  "allDeclaredConstructors":true
+},
+{
+  "name":"org.whispersystems.signalservice.api.profiles.SignalServiceProfile$Badge",
   "allDeclaredFields":true,
   "allDeclaredMethods":true,
   "allDeclaredConstructors":true
@@ -2179,6 +2217,17 @@
     {"name":"groupIds_"}, 
     {"name":"numbers_"}, 
     {"name":"uuids_"}
+  ]
+},
+{
+  "name":"org.whispersystems.signalservice.internal.push.SignalServiceProtos$SyncMessage$Configuration",
+  "fields":[
+    {"name":"bitField0_"}, 
+    {"name":"linkPreviews_"}, 
+    {"name":"provisioningVersion_"}, 
+    {"name":"readReceipts_"}, 
+    {"name":"typingIndicators_"}, 
+    {"name":"unidentifiedDeliveryIndicators_"}
   ]
 },
 {

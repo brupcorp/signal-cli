@@ -6,7 +6,6 @@ import org.asamk.signal.manager.api.RecipientIdentifier;
 import org.asamk.signal.manager.groups.GroupId;
 import org.asamk.signal.manager.groups.GroupUtils;
 import org.asamk.signal.util.DateUtils;
-import org.asamk.signal.util.Util;
 import org.slf4j.helpers.MessageFormatter;
 import org.whispersystems.libsignal.protocol.DecryptionErrorMessage;
 import org.whispersystems.signalservice.api.messages.SignalServiceAttachment;
@@ -61,13 +60,13 @@ public class ReceiveMessageHandler implements Manager.ReceiveMessageHandler {
                     final var recipientName = getLegacyIdentifier(m.resolveSignalServiceAddress(e.getSender()));
                     writer.println(
                             "Use 'signal-cli -u {} listIdentities -n {}', verify the key and run 'signal-cli -u {} trust -v \"FINGER_PRINT\" {}' to mark it as trusted",
-                            m.getUsername(),
+                            m.getSelfNumber(),
                             recipientName,
-                            m.getUsername(),
+                            m.getSelfNumber(),
                             recipientName);
                     writer.println(
                             "If you don't care about security, use 'signal-cli -u {} trust -a {}' to trust it without verification",
-                            m.getUsername(),
+                            m.getSelfNumber(),
                             recipientName);
                 } else {
                     writer.println("Exception: {} ({})", exception.getMessage(), exception.getClass().getSimpleName());
@@ -377,9 +376,6 @@ public class ReceiveMessageHandler implements Manager.ReceiveMessageHandler {
             writer.println("Received sync message with verified identities:");
             final var verifiedMessage = syncMessage.getVerified().get();
             writer.println("- {}: {}", formatContact(verifiedMessage.getDestination()), verifiedMessage.getVerified());
-            var safetyNumber = Util.formatSafetyNumber(m.computeSafetyNumber(verifiedMessage.getDestination(),
-                    verifiedMessage.getIdentityKey()));
-            writer.indentedWriter().println(safetyNumber);
         }
         if (syncMessage.getConfiguration().isPresent()) {
             writer.println("Received sync message with configuration:");
@@ -657,7 +653,7 @@ public class ReceiveMessageHandler implements Manager.ReceiveMessageHandler {
     private void printMention(
             PlainTextWriter writer, SignalServiceDataMessage.Mention mention
     ) {
-        final var address = m.resolveSignalServiceAddress(mention.getUuid());
+        final var address = m.resolveSignalServiceAddress(new SignalServiceAddress(mention.getUuid()));
         writer.println("- {}: {} (length: {})", formatContact(address), mention.getStart(), mention.getLength());
     }
 

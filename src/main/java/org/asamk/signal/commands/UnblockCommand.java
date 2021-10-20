@@ -36,7 +36,8 @@ public class UnblockCommand implements JsonRpcLocalCommand {
     public void handleCommand(
             final Namespace ns, final Manager m, final OutputWriter outputWriter
     ) throws CommandException {
-        for (var contactNumber : CommandUtil.getSingleRecipientIdentifiers(ns.getList("recipient"), m.getUsername())) {
+        for (var contactNumber : CommandUtil.getSingleRecipientIdentifiers(ns.getList("recipient"),
+                m.getSelfNumber())) {
             try {
                 m.setContactBlocked(contactNumber, false);
             } catch (NotMasterDeviceException e) {
@@ -50,6 +51,8 @@ public class UnblockCommand implements JsonRpcLocalCommand {
         for (var groupId : CommandUtil.getGroupIds(groupIdStrings)) {
             try {
                 m.setGroupBlocked(groupId, false);
+            } catch (NotMasterDeviceException e) {
+                throw new UserErrorException("This command doesn't work on linked devices.");
             } catch (GroupNotFoundException e) {
                 logger.warn("Unknown group id: {}", groupId);
             } catch (IOException e) {

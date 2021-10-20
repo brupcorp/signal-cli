@@ -7,6 +7,7 @@ import org.whispersystems.libsignal.ecc.ECPublicKey;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.push.TrustStore;
 import org.whispersystems.signalservice.internal.configuration.SignalCdnUrl;
+import org.whispersystems.signalservice.internal.configuration.SignalCdshUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalContactDiscoveryUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalKeyBackupServiceUrl;
 import org.whispersystems.signalservice.internal.configuration.SignalProxy;
@@ -38,13 +39,14 @@ class LiveConfig {
     private final static String SIGNAL_CONTACT_DISCOVERY_URL = "https://api.directory.signal.org";
     private final static String SIGNAL_KEY_BACKUP_URL = "https://api.backup.signal.org";
     private final static String STORAGE_URL = "https://storage.signal.org";
+    private final static String SIGNAL_CDSH_URL = "";
     private final static TrustStore TRUST_STORE = new WhisperTrustStore();
 
     private final static Optional<Dns> dns = Optional.absent();
     private final static Optional<SignalProxy> proxy = Optional.absent();
 
     private final static byte[] zkGroupServerPublicParams = Base64.getDecoder()
-            .decode("AMhf5ywVwITZMsff/eCyudZx9JDmkkkbV6PInzG4p8x3VqVJSFiMvnvlEKWuRob/1eaIetR31IYeAbm0NdOuHH8Qi+Rexi1wLlpzIo1gstHWBfZzy1+qHRV5A4TqPp15YzBPm0WSggW6PbSn+F4lf57VCnHF7p8SvzAA2ZZJPYJURt8X7bbg+H3i+PEjH9DXItNEqs2sNcug37xZQDLm7X0=");
+            .decode("AMhf5ywVwITZMsff/eCyudZx9JDmkkkbV6PInzG4p8x3VqVJSFiMvnvlEKWuRob/1eaIetR31IYeAbm0NdOuHH8Qi+Rexi1wLlpzIo1gstHWBfZzy1+qHRV5A4TqPp15YzBPm0WSggW6PbSn+F4lf57VCnHF7p8SvzAA2ZZJPYJURt8X7bbg+H3i+PEjH9DXItNEqs2sNcug37xZQDLm7X36nOoGPs54XsEGzPdEV+itQNGUFEjY6X9Uv+Acuks7NpyGvCoKxGwgKgE5XyJ+nNKlyHHOLb6N1NuHyBrZrgtY");
 
     static SignalServiceConfiguration createDefaultServiceConfiguration(
             final List<Interceptor> interceptors
@@ -58,6 +60,7 @@ class LiveConfig {
                         TRUST_STORE)},
                 new SignalKeyBackupServiceUrl[]{new SignalKeyBackupServiceUrl(SIGNAL_KEY_BACKUP_URL, TRUST_STORE)},
                 new SignalStorageUrl[]{new SignalStorageUrl(STORAGE_URL, TRUST_STORE)},
+                new SignalCdshUrl[]{new SignalCdshUrl(SIGNAL_CDSH_URL, TRUST_STORE)},
                 interceptors,
                 dns,
                 proxy,

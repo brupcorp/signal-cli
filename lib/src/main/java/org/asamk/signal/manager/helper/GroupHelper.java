@@ -145,7 +145,10 @@ public class GroupHelper {
                         groupMasterKey);
             }
             if (group == null) {
-                group = groupV2Helper.getDecryptedGroup(groupSecretParams);
+                try {
+                    group = groupV2Helper.getDecryptedGroup(groupSecretParams);
+                } catch (NotAGroupMemberException ignored) {
+                }
             }
             if (group != null) {
                 storeProfileKeysFromMembers(group);
@@ -348,10 +351,20 @@ public class GroupHelper {
 
     private GroupInfo getGroup(GroupId groupId, boolean forceUpdate) {
         final var group = account.getGroupStore().getGroup(groupId);
-        if (group instanceof GroupInfoV2 && (forceUpdate || ((GroupInfoV2) group).getGroup() == null)) {
-            final var groupSecretParams = GroupSecretParams.deriveFromMasterKey(((GroupInfoV2) group).getMasterKey());
-            ((GroupInfoV2) group).setGroup(groupV2Helper.getDecryptedGroup(groupSecretParams), recipientResolver);
-            account.getGroupStore().updateGroup(group);
+        if (group instanceof GroupInfoV2) {
+            final var groupInfoV2 = (GroupInfoV2) group;
+            if (forceUpdate || (!groupInfoV2.isPermissionDenied() && groupInfoV2.getGroup() == null)) {
+                final var groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupInfoV2.getMasterKey());
+                DecryptedGroup decryptedGroup;
+                try {
+                    decryptedGroup = groupV2Helper.getDecryptedGroup(groupSecretParams);
+                } catch (NotAGroupMemberException e) {
+                    groupInfoV2.setPermissionDenied(true);
+                    decryptedGroup = null;
+                }
+                groupInfoV2.setGroup(decryptedGroup, recipientResolver);
+                account.getGroupStore().updateGroup(group);
+            }
         }
         return group;
     }
@@ -626,7 +639,7 @@ public class GroupHelper {
 
         return SignalServiceDataMessage.newBuilder()
                 .asGroupMessage(group.build())
-                .withExpiration(g.getMessageExpirationTime());
+                .withExpiration(g.getMessageExpirationTimer());
     }
 
     private SignalServiceDataMessage.Builder getGroupUpdateMessageBuilder(GroupInfoV2 g, byte[] signedGroupChange) {
@@ -635,7 +648,7 @@ public class GroupHelper {
                 .withSignedGroupChange(signedGroupChange);
         return SignalServiceDataMessage.newBuilder()
                 .asGroupMessage(group.build())
-                .withExpiration(g.getMessageExpirationTime());
+                .withExpiration(g.getMessageExpirationTimer());
     }
 
     private SendGroupMessageResults sendUpdateGroupV2Message(

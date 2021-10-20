@@ -2,62 +2,140 @@ package org.asamk.signal.dbus;
 
 import org.asamk.Signal;
 import org.asamk.signal.BaseConfig;
+import org.asamk.signal.commands.exceptions.IOErrorException;
 import org.asamk.signal.manager.AttachmentInvalidException;
 import org.asamk.signal.manager.Manager;
 import org.asamk.signal.manager.NotMasterDeviceException;
+import org.asamk.signal.manager.StickerPackInvalidException;
 import org.asamk.signal.manager.UntrustedIdentityException;
+import org.asamk.signal.manager.api.Identity;
 import org.asamk.signal.manager.api.Message;
 import org.asamk.signal.manager.api.RecipientIdentifier;
 import org.asamk.signal.manager.api.TypingAction;
+import org.asamk.signal.manager.api.UpdateGroup;
 import org.asamk.signal.manager.groups.GroupId;
 import org.asamk.signal.manager.groups.GroupInviteLinkUrl;
+import org.asamk.signal.manager.groups.GroupLinkState;
 import org.asamk.signal.manager.groups.GroupNotFoundException;
+import org.asamk.signal.manager.groups.GroupPermission;
 import org.asamk.signal.manager.groups.GroupSendingNotAllowedException;
 import org.asamk.signal.manager.groups.LastGroupAdminException;
 import org.asamk.signal.manager.groups.NotAGroupMemberException;
-import org.asamk.signal.manager.storage.identities.IdentityInfo;
+import org.asamk.signal.manager.storage.recipients.Profile;
+import org.asamk.signal.manager.storage.recipients.RecipientAddress;
 import org.asamk.signal.util.ErrorUtils;
-import org.asamk.signal.util.Util;
+import org.freedesktop.dbus.DBusPath;
+import org.freedesktop.dbus.connections.impl.DBusConnection;
+import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.exceptions.DBusExecutionException;
+import org.freedesktop.dbus.types.Variant;
+import org.whispersystems.libsignal.InvalidKeyException;
 import org.whispersystems.libsignal.util.Pair;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.groupsv2.GroupLinkNotActiveException;
 import org.whispersystems.signalservice.api.messages.SendMessageResult;
 import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
 import org.whispersystems.signalservice.api.util.InvalidNumberException;
+import org.whispersystems.signalservice.internal.contacts.crypto.UnauthenticatedResponseException;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import static org.asamk.signal.util.Util.getLegacyIdentifier;
 
 public class DbusSignalImpl implements Signal {
 
     private final Manager m;
+    private final DBusConnection connection;
     private final String objectPath;
 
-    public DbusSignalImpl(final Manager m, final String objectPath) {
+    private DBusPath thisDevice;
+    private final List<StructDevice> devices = new ArrayList<>();
+    private final List<StructGroup> groups = new ArrayList<>();
+
+    public DbusSignalImpl(final Manager m, DBusConnection connection, final String objectPath) {
         this.m = m;
+        this.connection = connection;
         this.objectPath = objectPath;
     }
 
-    @Override
-    public boolean isRemote() {
-        return false;
+    public void initObjects() {
+        updateDevices();
+        updateGroups();
+    }
+
+    public void close() {
+        unExportDevices();
+        unExportGroups();
     }
 
     @Override
     public String getObjectPath() {
         return objectPath;
+    }
+
+    @Override
+    public String getSelfNumber() {
+        return m.getSelfNumber();
+    }
+
+    @Override
+    public void submitRateLimitChallenge(String challenge, String captchaString) throws IOErrorException {
+        final var captcha = captchaString == null ? null : captchaString.replace("signalcaptcha://", "");
+
+        try {
+            m.submitRateLimitRecaptchaChallenge(challenge, captcha);
+        } catch (IOException e) {
+            throw new IOErrorException("Submit challenge error: " + e.getMessage(), e);
+        }
+
+    }
+
+    @Override
+    public void addDevice(String uri) {
+        try {
+            m.addDeviceLink(new URI(uri));
+        } catch (IOException | InvalidKeyException e) {
+            throw new Error.Failure(e.getClass().getSimpleName() + " Add device link failed. " + e.getMessage());
+        } catch (URISyntaxException e) {
+            throw new Error.InvalidUri(e.getClass().getSimpleName()
+                    + " Device link uri has invalid format: "
+                    + e.getMessage());
+        }
+    }
+
+    @Override
+    public DBusPath getDevice(long deviceId) {
+        updateDevices();
+        final var deviceOptional = devices.stream().filter(g -> g.getId().equals(deviceId)).findFirst();
+        if (deviceOptional.isEmpty()) {
+            throw new Error.DeviceNotFound("Device not found");
+        }
+        return deviceOptional.get().getObjectPath();
+    }
+
+    @Override
+    public List<StructDevice> listDevices() {
+        updateDevices();
+        return this.devices;
+    }
+
+    @Override
+    public DBusPath getThisDevice() {
+        updateDevices();
+        return thisDevice;
     }
 
     @Override
@@ -71,7 +149,7 @@ public class DbusSignalImpl implements Signal {
     public long sendMessage(final String message, final List<String> attachments, final List<String> recipients) {
         try {
             final var results = m.sendMessage(new Message(message, attachments),
-                    getSingleRecipientIdentifiers(recipients, m.getUsername()).stream()
+                    getSingleRecipientIdentifiers(recipients, m.getSelfNumber()).stream()
                             .map(RecipientIdentifier.class::cast)
                             .collect(Collectors.toSet()));
 
@@ -101,7 +179,7 @@ public class DbusSignalImpl implements Signal {
     ) {
         try {
             final var results = m.sendRemoteDeleteMessage(targetSentTimestamp,
-                    getSingleRecipientIdentifiers(recipients, m.getUsername()).stream()
+                    getSingleRecipientIdentifiers(recipients, m.getSelfNumber()).stream()
                             .map(RecipientIdentifier.class::cast)
                             .collect(Collectors.toSet()));
             checkSendMessageResults(results.getTimestamp(), results.getResults());
@@ -153,9 +231,9 @@ public class DbusSignalImpl implements Signal {
         try {
             final var results = m.sendMessageReaction(emoji,
                     remove,
-                    getSingleRecipientIdentifier(targetAuthor, m.getUsername()),
+                    getSingleRecipientIdentifier(targetAuthor, m.getSelfNumber()),
                     targetSentTimestamp,
-                    getSingleRecipientIdentifiers(recipients, m.getUsername()).stream()
+                    getSingleRecipientIdentifiers(recipients, m.getSelfNumber()).stream()
                             .map(RecipientIdentifier.class::cast)
                             .collect(Collectors.toSet()));
             checkSendMessageResults(results.getTimestamp(), results.getResults());
@@ -175,7 +253,7 @@ public class DbusSignalImpl implements Signal {
             var recipients = new ArrayList<String>(1);
             recipients.add(recipient);
             m.sendTypingMessage(stop ? TypingAction.STOP : TypingAction.START,
-                    getSingleRecipientIdentifiers(recipients, m.getUsername()).stream()
+                    getSingleRecipientIdentifiers(recipients, m.getSelfNumber()).stream()
                             .map(RecipientIdentifier.class::cast)
                             .collect(Collectors.toSet()));
         } catch (IOException e) {
@@ -189,14 +267,32 @@ public class DbusSignalImpl implements Signal {
 
     @Override
     public void sendReadReceipt(
-            final String recipient, final List<Long> timestamps
+            final String recipient, final List<Long> messageIds
     ) throws Error.Failure, Error.UntrustedIdentity {
         try {
-            m.sendReadReceipt(getSingleRecipientIdentifier(recipient, m.getUsername()), timestamps);
+            m.sendReadReceipt(getSingleRecipientIdentifier(recipient, m.getSelfNumber()), messageIds);
         } catch (IOException e) {
             throw new Error.Failure(e.getMessage());
         } catch (UntrustedIdentityException e) {
             throw new Error.UntrustedIdentity(e.getMessage());
+        }
+    }
+
+    @Override
+    public void sendContacts() {
+        try {
+            m.sendContacts();
+        } catch (IOException e) {
+            throw new Error.Failure("SendContacts error: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void sendSyncRequest() {
+        try {
+            m.requestAllSyncData();
+        } catch (IOException e) {
+            throw new Error.Failure("Request sync data error: " + e.getMessage());
         }
     }
 
@@ -206,7 +302,7 @@ public class DbusSignalImpl implements Signal {
     ) throws Error.AttachmentInvalid, Error.Failure, Error.UntrustedIdentity {
         try {
             final var results = m.sendMessage(new Message(message, attachments),
-                    Set.of(new RecipientIdentifier.NoteToSelf()));
+                    Set.of(RecipientIdentifier.NoteToSelf.INSTANCE));
             checkSendMessageResults(results.getTimestamp(), results.getResults());
             return results.getTimestamp();
         } catch (AttachmentInvalidException e) {
@@ -221,7 +317,7 @@ public class DbusSignalImpl implements Signal {
     @Override
     public void sendEndSessionMessage(final List<String> recipients) {
         try {
-            final var results = m.sendEndSessionMessage(getSingleRecipientIdentifiers(recipients, m.getUsername()));
+            final var results = m.sendEndSessionMessage(getSingleRecipientIdentifiers(recipients, m.getSelfNumber()));
             checkSendMessageResults(results.getTimestamp(), results.getResults());
         } catch (IOException e) {
             throw new Error.Failure(e.getMessage());
@@ -255,7 +351,7 @@ public class DbusSignalImpl implements Signal {
         try {
             final var results = m.sendMessageReaction(emoji,
                     remove,
-                    getSingleRecipientIdentifier(targetAuthor, m.getUsername()),
+                    getSingleRecipientIdentifier(targetAuthor, m.getSelfNumber()),
                     targetSentTimestamp,
                     Set.of(new RecipientIdentifier.Group(getGroupId(groupId))));
             checkSendMessageResults(results.getTimestamp(), results.getResults());
@@ -271,13 +367,14 @@ public class DbusSignalImpl implements Signal {
     // the profile name
     @Override
     public String getContactName(final String number) {
-        return m.getContactOrProfileName(getSingleRecipientIdentifier(number, m.getUsername()));
+        final var name = m.getContactOrProfileName(getSingleRecipientIdentifier(number, m.getSelfNumber()));
+        return name == null ? "" : name;
     }
 
     @Override
     public void setContactName(final String number, final String name) {
         try {
-            m.setContactName(getSingleRecipientIdentifier(number, m.getUsername()), name);
+            m.setContactName(getSingleRecipientIdentifier(number, m.getSelfNumber()), name);
         } catch (NotMasterDeviceException e) {
             throw new Error.Failure("This command doesn't work on linked devices.");
         } catch (UnregisteredUserException e) {
@@ -286,9 +383,18 @@ public class DbusSignalImpl implements Signal {
     }
 
     @Override
+    public void setExpirationTimer(final String number, final int expiration) {
+        try {
+            m.setExpirationTimer(getSingleRecipientIdentifier(number, m.getSelfNumber()), expiration);
+        } catch (IOException e) {
+            throw new Error.Failure(e.getMessage());
+        }
+    }
+
+    @Override
     public void setContactBlocked(final String number, final boolean blocked) {
         try {
-            m.setContactBlocked(getSingleRecipientIdentifier(number, m.getUsername()), blocked);
+            m.setContactBlocked(getSingleRecipientIdentifier(number, m.getSelfNumber()), blocked);
         } catch (NotMasterDeviceException e) {
             throw new Error.Failure("This command doesn't work on linked devices.");
         } catch (IOException e) {
@@ -300,6 +406,8 @@ public class DbusSignalImpl implements Signal {
     public void setGroupBlocked(final byte[] groupId, final boolean blocked) {
         try {
             m.setGroupBlocked(getGroupId(groupId), blocked);
+        } catch (NotMasterDeviceException e) {
+            throw new Error.Failure("This command doesn't work on linked devices.");
         } catch (GroupNotFoundException e) {
             throw new Error.GroupNotFound(e.getMessage());
         } catch (IOException e) {
@@ -318,9 +426,25 @@ public class DbusSignalImpl implements Signal {
     }
 
     @Override
+    public DBusPath getGroup(final byte[] groupId) {
+        updateGroups();
+        final var groupOptional = groups.stream().filter(g -> Arrays.equals(g.getId(), groupId)).findFirst();
+        if (groupOptional.isEmpty()) {
+            throw new Error.GroupNotFound("Group not found");
+        }
+        return groupOptional.get().getObjectPath();
+    }
+
+    @Override
+    public List<StructGroup> listGroups() {
+        updateGroups();
+        return groups;
+    }
+
+    @Override
     public String getGroupName(final byte[] groupId) {
         var group = m.getGroup(getGroupId(groupId));
-        if (group == null) {
+        if (group == null || group.getTitle() == null) {
             return "";
         } else {
             return group.getTitle();
@@ -333,46 +457,36 @@ public class DbusSignalImpl implements Signal {
         if (group == null) {
             return List.of();
         } else {
-            return group.getMembers()
-                    .stream()
-                    .map(m::resolveSignalServiceAddress)
-                    .map(Util::getLegacyIdentifier)
-                    .collect(Collectors.toList());
+            final var members = group.getMembers();
+            return getRecipientStrings(members);
         }
+    }
+
+    @Override
+    public byte[] createGroup(
+            final String name, final List<String> members, final String avatar
+    ) throws Error.AttachmentInvalid, Error.Failure, Error.InvalidNumber {
+        return updateGroup(new byte[0], name, members, avatar);
     }
 
     @Override
     public byte[] updateGroup(byte[] groupId, String name, List<String> members, String avatar) {
         try {
-            if (groupId.length == 0) {
-                groupId = null;
-            }
-            if (name.isEmpty()) {
-                name = null;
-            }
-            if (avatar.isEmpty()) {
-                avatar = null;
-            }
-            final var memberIdentifiers = getSingleRecipientIdentifiers(members, m.getUsername());
+            groupId = nullIfEmpty(groupId);
+            name = nullIfEmpty(name);
+            avatar = nullIfEmpty(avatar);
+            final var memberIdentifiers = getSingleRecipientIdentifiers(members, m.getSelfNumber());
             if (groupId == null) {
                 final var results = m.createGroup(name, memberIdentifiers, avatar == null ? null : new File(avatar));
                 checkSendMessageResults(results.second().getTimestamp(), results.second().getResults());
                 return results.first().serialize();
             } else {
                 final var results = m.updateGroup(getGroupId(groupId),
-                        name,
-                        null,
-                        memberIdentifiers,
-                        null,
-                        null,
-                        null,
-                        false,
-                        null,
-                        null,
-                        null,
-                        avatar == null ? null : new File(avatar),
-                        null,
-                        null);
+                        UpdateGroup.newBuilder()
+                                .withName(name)
+                                .withMembers(memberIdentifiers)
+                                .withAvatarFile(avatar == null ? null : new File(avatar))
+                                .build());
                 if (results != null) {
                     checkSendMessageResults(results.getTimestamp(), results.getResults());
                 }
@@ -393,6 +507,56 @@ public class DbusSignalImpl implements Signal {
     }
 
     @Override
+    public boolean isRegistered(String number) {
+        var result = isRegistered(List.of(number));
+        return result.get(0);
+    }
+
+    @Override
+    public List<Boolean> isRegistered(List<String> numbers) {
+        var results = new ArrayList<Boolean>();
+        if (numbers.isEmpty()) {
+            return results;
+        }
+
+        Map<String, Pair<String, UUID>> registered;
+        try {
+            registered = m.areUsersRegistered(new HashSet<>(numbers));
+        } catch (IOException e) {
+            throw new Error.Failure(e.getMessage());
+        }
+
+        return numbers.stream().map(number -> {
+            var uuid = registered.get(number).second();
+            return uuid != null;
+        }).collect(Collectors.toList());
+    }
+
+    @Override
+    public void updateProfile(
+            String givenName,
+            String familyName,
+            String about,
+            String aboutEmoji,
+            String avatarPath,
+            final boolean removeAvatar
+    ) {
+        try {
+            givenName = nullIfEmpty(givenName);
+            familyName = nullIfEmpty(familyName);
+            about = nullIfEmpty(about);
+            aboutEmoji = nullIfEmpty(aboutEmoji);
+            avatarPath = nullIfEmpty(avatarPath);
+            Optional<File> avatarFile = removeAvatar
+                    ? Optional.absent()
+                    : avatarPath == null ? null : Optional.of(new File(avatarPath));
+            m.setProfile(givenName, familyName, about, aboutEmoji, avatarFile);
+        } catch (IOException e) {
+            throw new Error.Failure(e.getMessage());
+        }
+    }
+
+    @Override
     public void updateProfile(
             final String name,
             final String about,
@@ -400,16 +564,28 @@ public class DbusSignalImpl implements Signal {
             String avatarPath,
             final boolean removeAvatar
     ) {
+        updateProfile(name, "", about, aboutEmoji, avatarPath, removeAvatar);
+    }
+
+    @Override
+    public void removePin() {
         try {
-            if (avatarPath.isEmpty()) {
-                avatarPath = null;
-            }
-            Optional<File> avatarFile = removeAvatar
-                    ? Optional.absent()
-                    : avatarPath == null ? null : Optional.of(new File(avatarPath));
-            m.setProfile(name, null, about, aboutEmoji, avatarFile);
+            m.setRegistrationLockPin(Optional.absent());
+        } catch (UnauthenticatedResponseException e) {
+            throw new Error.Failure("Remove pin failed with unauthenticated response: " + e.getMessage());
         } catch (IOException e) {
-            throw new Error.Failure(e.getMessage());
+            throw new Error.Failure("Remove pin error: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void setPin(String registrationLockPin) {
+        try {
+            m.setRegistrationLockPin(Optional.of(registrationLockPin));
+        } catch (UnauthenticatedResponseException e) {
+            throw new Error.Failure("Set pin error failed with unauthenticated response: " + e.getMessage());
+        } catch (IOException e) {
+            throw new Error.Failure("Set pin error: " + e.getMessage());
         }
     }
 
@@ -424,10 +600,9 @@ public class DbusSignalImpl implements Signal {
     // all numbers the system knows
     @Override
     public List<String> listNumbers() {
-        return Stream.concat(m.getIdentities().stream().map(IdentityInfo::getRecipientId),
+        return Stream.concat(m.getIdentities().stream().map(Identity::getRecipient),
                 m.getContacts().stream().map(Pair::first))
-                .map(m::resolveSignalServiceAddress)
-                .map(a -> a.getNumber().orNull())
+                .map(a -> a.getNumber().orElse(null))
                 .filter(Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());
@@ -440,16 +615,19 @@ public class DbusSignalImpl implements Signal {
         var contacts = m.getContacts();
         for (var c : contacts) {
             if (name.equals(c.second().getName())) {
-                numbers.add(getLegacyIdentifier(m.resolveSignalServiceAddress(c.first())));
+                numbers.add(c.first().getLegacyIdentifier());
             }
         }
         // Try profiles if no contact name was found
         for (var identity : m.getIdentities()) {
-            final var recipientId = identity.getRecipientId();
-            final var address = m.resolveSignalServiceAddress(recipientId);
-            var number = address.getNumber().orNull();
+            final var address = identity.getRecipient();
+            var number = address.getNumber().orElse(null);
             if (number != null) {
-                var profile = m.getRecipientProfile(recipientId);
+                Profile profile = null;
+                try {
+                    profile = m.getRecipientProfile(RecipientIdentifier.Single.fromAddress(address));
+                } catch (UnregisteredUserException ignored) {
+                }
                 if (profile != null && profile.getDisplayName().equals(name)) {
                     numbers.add(number);
                 }
@@ -490,7 +668,7 @@ public class DbusSignalImpl implements Signal {
 
     @Override
     public boolean isContactBlocked(final String number) {
-        return m.isContactBlocked(getSingleRecipientIdentifier(number, m.getUsername()));
+        return m.isContactBlocked(getSingleRecipientIdentifier(number, m.getSelfNumber()));
     }
 
     @Override
@@ -509,7 +687,19 @@ public class DbusSignalImpl implements Signal {
         if (group == null) {
             return false;
         } else {
-            return group.isMember(m.getSelfRecipientId());
+            return group.isMember();
+        }
+    }
+
+    @Override
+    public String uploadStickerPack(String stickerPackPath) {
+        File path = new File(stickerPackPath);
+        try {
+            return m.uploadStickerPack(path).toString();
+        } catch (IOException e) {
+            throw new Error.Failure("Upload error (maybe image size is too large):" + e.getMessage());
+        } catch (StickerPackInvalidException e) {
+            throw new Error.Failure("Invalid sticker pack: " + e.getMessage());
         }
     }
 
@@ -576,6 +766,10 @@ public class DbusSignalImpl implements Signal {
         throw new Error.Failure(message.toString());
     }
 
+    private static List<String> getRecipientStrings(final Set<RecipientAddress> members) {
+        return members.stream().map(RecipientAddress::getLegacyIdentifier).collect(Collectors.toList());
+    }
+
     private static Set<RecipientIdentifier.Single> getSingleRecipientIdentifiers(
             final Collection<String> recipientStrings, final String localNumber
     ) throws DBusExecutionException {
@@ -601,6 +795,293 @@ public class DbusSignalImpl implements Signal {
             return GroupId.unknownVersion(groupId);
         } catch (Throwable e) {
             throw new Error.InvalidGroupId("Invalid group id: " + e.getMessage());
+        }
+    }
+
+    private byte[] nullIfEmpty(final byte[] array) {
+        return array.length == 0 ? null : array;
+    }
+
+    private String nullIfEmpty(final String name) {
+        return name.isEmpty() ? null : name;
+    }
+
+    private String emptyIfNull(final String string) {
+        return string == null ? "" : string;
+    }
+
+    private static String getDeviceObjectPath(String basePath, long deviceId) {
+        return basePath + "/Devices/" + deviceId;
+    }
+
+    private void updateDevices() {
+        List<org.asamk.signal.manager.api.Device> linkedDevices;
+        try {
+            linkedDevices = m.getLinkedDevices();
+        } catch (IOException e) {
+            throw new Error.Failure("Failed to get linked devices: " + e.getMessage());
+        }
+
+        unExportDevices();
+
+        linkedDevices.forEach(d -> {
+            final var object = new DbusSignalDeviceImpl(d);
+            final var deviceObjectPath = object.getObjectPath();
+            try {
+                connection.exportObject(object);
+            } catch (DBusException e) {
+                e.printStackTrace();
+            }
+            if (d.isThisDevice()) {
+                thisDevice = new DBusPath(deviceObjectPath);
+            }
+            this.devices.add(new StructDevice(new DBusPath(deviceObjectPath), d.getId(), emptyIfNull(d.getName())));
+        });
+    }
+
+    private void unExportDevices() {
+        this.devices.stream()
+                .map(StructDevice::getObjectPath)
+                .map(DBusPath::getPath)
+                .forEach(connection::unExportObject);
+        this.devices.clear();
+    }
+
+    private static String getGroupObjectPath(String basePath, byte[] groupId) {
+        return basePath + "/Groups/" + Base64.getEncoder()
+                .encodeToString(groupId)
+                .replace("+", "_")
+                .replace("/", "_")
+                .replace("=", "_");
+    }
+
+    private void updateGroups() {
+        List<org.asamk.signal.manager.api.Group> groups;
+        groups = m.getGroups();
+
+        unExportGroups();
+
+        groups.forEach(g -> {
+            final var object = new DbusSignalGroupImpl(g.getGroupId());
+            try {
+                connection.exportObject(object);
+            } catch (DBusException e) {
+                e.printStackTrace();
+            }
+            this.groups.add(new StructGroup(new DBusPath(object.getObjectPath()),
+                    g.getGroupId().serialize(),
+                    emptyIfNull(g.getTitle())));
+        });
+    }
+
+    private void unExportGroups() {
+        this.groups.stream().map(StructGroup::getObjectPath).map(DBusPath::getPath).forEach(connection::unExportObject);
+        this.groups.clear();
+    }
+
+    public class DbusSignalDeviceImpl extends DbusProperties implements Signal.Device {
+
+        private final org.asamk.signal.manager.api.Device device;
+
+        public DbusSignalDeviceImpl(final org.asamk.signal.manager.api.Device device) {
+            super.addPropertiesHandler(new DbusInterfacePropertiesHandler("org.asamk.Signal.Device",
+                    List.of(new DbusProperty<>("Id", device::getId),
+                            new DbusProperty<>("Name", () -> emptyIfNull(device.getName()), this::setDeviceName),
+                            new DbusProperty<>("Created", device::getCreated),
+                            new DbusProperty<>("LastSeen", device::getLastSeen))));
+            this.device = device;
+        }
+
+        @Override
+        public String getObjectPath() {
+            return getDeviceObjectPath(objectPath, device.getId());
+        }
+
+        @Override
+        public void removeDevice() throws Error.Failure {
+            try {
+                m.removeLinkedDevices(device.getId());
+                updateDevices();
+            } catch (IOException e) {
+                throw new Error.Failure(e.getMessage());
+            }
+        }
+
+        private void setDeviceName(String name) {
+            if (!device.isThisDevice()) {
+                throw new Error.Failure("Only the name of this device can be changed");
+            }
+            try {
+                m.updateAccountAttributes(name);
+                // update device list
+                updateDevices();
+            } catch (IOException e) {
+                throw new Error.Failure(e.getMessage());
+            }
+        }
+    }
+
+    public class DbusSignalGroupImpl extends DbusProperties implements Signal.Group {
+
+        private final GroupId groupId;
+
+        public DbusSignalGroupImpl(final GroupId groupId) {
+            this.groupId = groupId;
+            super.addPropertiesHandler(new DbusInterfacePropertiesHandler("org.asamk.Signal.Group",
+                    List.of(new DbusProperty<>("Id", groupId::serialize),
+                            new DbusProperty<>("Name", () -> emptyIfNull(getGroup().getTitle()), this::setGroupName),
+                            new DbusProperty<>("Description",
+                                    () -> emptyIfNull(getGroup().getDescription()),
+                                    this::setGroupDescription),
+                            new DbusProperty<>("Avatar", this::setGroupAvatar),
+                            new DbusProperty<>("IsBlocked", () -> getGroup().isBlocked(), this::setIsBlocked),
+                            new DbusProperty<>("IsMember", () -> getGroup().isMember()),
+                            new DbusProperty<>("IsAdmin", () -> getGroup().isAdmin()),
+                            new DbusProperty<>("MessageExpirationTimer",
+                                    () -> getGroup().getMessageExpirationTimer(),
+                                    this::setMessageExpirationTime),
+                            new DbusProperty<>("Members",
+                                    () -> new Variant<>(getRecipientStrings(getGroup().getMembers()), "as")),
+                            new DbusProperty<>("PendingMembers",
+                                    () -> new Variant<>(getRecipientStrings(getGroup().getPendingMembers()), "as")),
+                            new DbusProperty<>("RequestingMembers",
+                                    () -> new Variant<>(getRecipientStrings(getGroup().getRequestingMembers()), "as")),
+                            new DbusProperty<>("Admins",
+                                    () -> new Variant<>(getRecipientStrings(getGroup().getAdminMembers()), "as")),
+                            new DbusProperty<>("PermissionAddMember",
+                                    () -> getGroup().getPermissionAddMember().name(),
+                                    this::setGroupPermissionAddMember),
+                            new DbusProperty<>("PermissionEditDetails",
+                                    () -> getGroup().getPermissionEditDetails().name(),
+                                    this::setGroupPermissionEditDetails),
+                            new DbusProperty<>("PermissionSendMessage",
+                                    () -> getGroup().getPermissionSendMessage().name(),
+                                    this::setGroupPermissionSendMessage),
+                            new DbusProperty<>("GroupInviteLink", () -> {
+                                final var groupInviteLinkUrl = getGroup().getGroupInviteLinkUrl();
+                                return groupInviteLinkUrl == null ? "" : groupInviteLinkUrl.getUrl();
+                            }))));
+        }
+
+        @Override
+        public String getObjectPath() {
+            return getGroupObjectPath(objectPath, groupId.serialize());
+        }
+
+        @Override
+        public void quitGroup() throws Error.Failure {
+            try {
+                m.quitGroup(groupId, Set.of());
+            } catch (GroupNotFoundException | NotAGroupMemberException e) {
+                throw new Error.GroupNotFound(e.getMessage());
+            } catch (IOException e) {
+                throw new Error.Failure(e.getMessage());
+            } catch (LastGroupAdminException e) {
+                throw new Error.LastGroupAdmin(e.getMessage());
+            }
+        }
+
+        @Override
+        public void addMembers(final List<String> recipients) throws Error.Failure {
+            final var memberIdentifiers = getSingleRecipientIdentifiers(recipients, m.getSelfNumber());
+            updateGroup(UpdateGroup.newBuilder().withMembers(memberIdentifiers).build());
+        }
+
+        @Override
+        public void removeMembers(final List<String> recipients) throws Error.Failure {
+            final var memberIdentifiers = getSingleRecipientIdentifiers(recipients, m.getSelfNumber());
+            updateGroup(UpdateGroup.newBuilder().withRemoveMembers(memberIdentifiers).build());
+        }
+
+        @Override
+        public void addAdmins(final List<String> recipients) throws Error.Failure {
+            final var memberIdentifiers = getSingleRecipientIdentifiers(recipients, m.getSelfNumber());
+            updateGroup(UpdateGroup.newBuilder().withAdmins(memberIdentifiers).build());
+        }
+
+        @Override
+        public void removeAdmins(final List<String> recipients) throws Error.Failure {
+            final var memberIdentifiers = getSingleRecipientIdentifiers(recipients, m.getSelfNumber());
+            updateGroup(UpdateGroup.newBuilder().withRemoveAdmins(memberIdentifiers).build());
+        }
+
+        @Override
+        public void resetLink() throws Error.Failure {
+            updateGroup(UpdateGroup.newBuilder().withResetGroupLink(true).build());
+        }
+
+        @Override
+        public void disableLink() throws Error.Failure {
+            updateGroup(UpdateGroup.newBuilder().withGroupLinkState(GroupLinkState.DISABLED).build());
+        }
+
+        @Override
+        public void enableLink(final boolean requiresApproval) throws Error.Failure {
+            updateGroup(UpdateGroup.newBuilder()
+                    .withGroupLinkState(requiresApproval
+                            ? GroupLinkState.ENABLED_WITH_APPROVAL
+                            : GroupLinkState.ENABLED)
+                    .build());
+        }
+
+        private org.asamk.signal.manager.api.Group getGroup() {
+            return m.getGroup(groupId);
+        }
+
+        private void setGroupName(final String name) {
+            updateGroup(UpdateGroup.newBuilder().withName(name).build());
+        }
+
+        private void setGroupDescription(final String description) {
+            updateGroup(UpdateGroup.newBuilder().withDescription(description).build());
+        }
+
+        private void setGroupAvatar(final String avatar) {
+            updateGroup(UpdateGroup.newBuilder().withAvatarFile(new File(avatar)).build());
+        }
+
+        private void setMessageExpirationTime(final int expirationTime) {
+            updateGroup(UpdateGroup.newBuilder().withExpirationTimer(expirationTime).build());
+        }
+
+        private void setGroupPermissionAddMember(final String permission) {
+            updateGroup(UpdateGroup.newBuilder().withAddMemberPermission(GroupPermission.valueOf(permission)).build());
+        }
+
+        private void setGroupPermissionEditDetails(final String permission) {
+            updateGroup(UpdateGroup.newBuilder()
+                    .withEditDetailsPermission(GroupPermission.valueOf(permission))
+                    .build());
+        }
+
+        private void setGroupPermissionSendMessage(final String permission) {
+            updateGroup(UpdateGroup.newBuilder()
+                    .withIsAnnouncementGroup(GroupPermission.valueOf(permission) == GroupPermission.ONLY_ADMINS)
+                    .build());
+        }
+
+        private void setIsBlocked(final boolean isBlocked) {
+            try {
+                m.setGroupBlocked(groupId, isBlocked);
+            } catch (NotMasterDeviceException e) {
+                throw new Error.Failure("This command doesn't work on linked devices.");
+            } catch (GroupNotFoundException e) {
+                throw new Error.GroupNotFound(e.getMessage());
+            } catch (IOException e) {
+                throw new Error.Failure(e.getMessage());
+            }
+        }
+
+        private void updateGroup(final UpdateGroup updateGroup) {
+            try {
+                m.updateGroup(groupId, updateGroup);
+            } catch (IOException e) {
+                throw new Error.Failure(e.getMessage());
+            } catch (GroupNotFoundException | NotAGroupMemberException | GroupSendingNotAllowedException e) {
+                throw new Error.GroupNotFound(e.getMessage());
+            } catch (AttachmentInvalidException e) {
+                throw new Error.AttachmentInvalid(e.getMessage());
+            }
         }
     }
 }
